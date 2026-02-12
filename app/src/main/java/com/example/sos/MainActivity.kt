@@ -2,6 +2,7 @@ package com.example.sos
 
 import android.Manifest
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -17,11 +18,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
@@ -30,69 +33,58 @@ import com.example.sos.ui.theme.SOSTheme
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.*
-import java.net.HttpURLConnection
-import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.*
 
 class MainActivity : ComponentActivity() {
 
-    // --- ROLE SWITCHING VARIABLES ---
+    // --- VARIABLES ---
     private var isAdvertising = false
+    private lateinit var database: com.google.firebase.database.DatabaseReference
+    private lateinit var prefs: SharedPreferences // To store user data locally
+
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private val switchRoleRunnable = object : Runnable {
         override fun run() {
-            if (connectedEndpoints.isNotEmpty()) return // Stop switching if connected!
-
-            stopAllEndpoints() // Clear previous state
-
+            if (connectedEndpoints.isNotEmpty()) return
+            stopAllEndpoints()
             if (isAdvertising) {
-                // Switch to LISTENING Mode
                 addLog("🔄 Switching to DISCOVERY Mode...")
                 startDiscovery()
             } else {
-                // Switch to HOSTING Mode
                 addLog("🔄 Switching to ADVERTISING Mode...")
                 startAdvertising()
             }
-
-            isAdvertising = !isAdvertising // Flip the flag
-            handler.postDelayed(this, 12000) // Switch every 12 seconds
+            isAdvertising = !isAdvertising
+            handler.postDelayed(this, 12000)
         }
     }
+
     private fun stopAllEndpoints() {
         connectionsClient.stopAdvertising()
         connectionsClient.stopDiscovery()
     }
-    private val SERVICE_ID = "sos_mesh_v2"
-    private val SERVER_URL = "http://10.170.92.228:3000/sos" // Ensure this matches your Laptop IP!
 
+    private val SERVICE_ID = "sos_mesh_v2"
     private val connectionsClient by lazy { Nearby.getConnectionsClient(this) }
     private lateinit var fusedLocationClient: com.google.android.gms.location.FusedLocationProviderClient
 
     private val connectedEndpoints = mutableSetOf<String>()
     private val receivedMessages = mutableSetOf<String>()
     private val storedSOSMessages = mutableListOf<String>()
-
-    // --- UI STATE FOR LOGS ---
     private val logMessages = mutableStateListOf<String>()
 
-    // Define permissions
-    // Define permissions based on Android version
-    // Define permissions based on Android version
     private val requiredPermissions = when {
-        // Android 13+ (API 33)
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> {
             arrayOf(
                 Manifest.permission.BLUETOOTH_SCAN,
                 Manifest.permission.BLUETOOTH_ADVERTISE,
                 Manifest.permission.BLUETOOTH_CONNECT,
                 Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION, // <--- MUST BE HERE WITH FINE LOCATION
+                Manifest.permission.ACCESS_COARSE_LOCATION,
                 Manifest.permission.NEARBY_WIFI_DEVICES
             )
         }
-        // Android 12 (API 31/32)
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             arrayOf(
                 Manifest.permission.BLUETOOTH_SCAN,
@@ -102,7 +94,6 @@ class MainActivity : ComponentActivity() {
                 Manifest.permission.ACCESS_COARSE_LOCATION
             )
         }
-        // Android 11 or lower
         else -> {
             arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
@@ -125,12 +116,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 1. Initialize Storage & Firebase
+        prefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+        database = com.google.firebase.database.FirebaseDatabase.getInstance().reference
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
 
         addLog("App Started. Initializing...")
         checkAndRequestPermissions()
 
-        // Background server sync
+        // Background Upload Logic
         android.os.Handler(mainLooper).postDelayed(object : Runnable {
             override fun run() {
                 if (isInternetAvailable() && storedSOSMessages.isNotEmpty()) {
@@ -143,26 +138,42 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             SOSTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    // We replaced the manual Column with this cleaner function call
-                    EmergencyScreen(
-                        logMessages = logMessages,
-                        onSendSOS = { p, m, h -> sendSOS(p, m, h) }
-                    )
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    // 2. CHECK: Is User Registered?
+                    var isRegistered by remember { mutableStateOf(prefs.getBoolean("is_registered", false)) }
+
+                    if (isRegistered) {
+                        // Show Main SOS Screen
+                        EmergencyScreen(
+                            logMessages = logMessages,
+                            onSendSOS = { p, m, h -> sendSOS(p, m, h) }
+                        )
+                    } else {
+                        // Show Sign Up Screen First
+                        SignUpScreen(
+                            onRegister = { name, age, phone ->
+                                // Save Data Permanently
+                                with(prefs.edit()) {
+                                    putString("user_name", name)
+                                    putString("user_age", age)
+                                    putString("user_phone", phone)
+                                    putBoolean("is_registered", true)
+                                    apply()
+                                }
+                                isRegistered = true // Switch Screen
+                                addLog("✅ User Registered: $name")
+                            }
+                        )
+                    }
                 }
             }
         }
     }
 
-    // --- HELPER TO UPDATE UI LOGS ---
+    // --- HELPER FUNCTIONS ---
     private fun addLog(msg: String) {
         val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-        runOnUiThread {
-            logMessages.add(0, "[$time] $msg") // Add to top
-        }
+        runOnUiThread { logMessages.add(0, "[$time] $msg") }
         Log.d("SOS_APP", msg)
     }
 
@@ -170,7 +181,6 @@ class MainActivity : ComponentActivity() {
         val missingPermissions = requiredPermissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
-
         if (missingPermissions.isEmpty()) {
             startMeshNetwork()
         } else {
@@ -180,45 +190,20 @@ class MainActivity : ComponentActivity() {
 
     private fun startMeshNetwork() {
         addLog("🚀 Starting Auto-Mesh Search...")
-        // Start the first loop immediately
         handler.post(switchRoleRunnable)
     }
 
-    // ------------------ ADVERTISING ------------------
+    // --- NEARBY CONNECTIONS LOGIC ---
     private fun startAdvertising() {
-        val options = AdvertisingOptions.Builder()
-            .setStrategy(Strategy.P2P_STAR)
-            .setLowPower(false) // High Power
-            .build()
-
-        connectionsClient.startAdvertising(
-            "SOS_User",
-            SERVICE_ID,
-            connectionLifecycleCallback,
-            options
-        ).addOnSuccessListener {
-            addLog("📡 Advertising Started (Offline Mode)")
-        }.addOnFailureListener {
-            addLog("❌ Advertising Failed: ${it.message}")
-        }
+        val options = AdvertisingOptions.Builder().setStrategy(Strategy.P2P_STAR).setLowPower(false).build()
+        connectionsClient.startAdvertising("SOS_User", SERVICE_ID, connectionLifecycleCallback, options)
+            .addOnFailureListener { addLog("❌ Advertising Failed: ${it.message}") }
     }
 
-    // ------------------ DISCOVERY ------------------
     private fun startDiscovery() {
-        val options = DiscoveryOptions.Builder()
-            .setStrategy(Strategy.P2P_STAR)
-            .setLowPower(false) // High Power
-            .build()
-
-        connectionsClient.startDiscovery(
-            SERVICE_ID,
-            endpointDiscoveryCallback,
-            options
-        ).addOnSuccessListener {
-            addLog("🔍 Discovery Started (Offline Mode)")
-        }.addOnFailureListener {
-            addLog("❌ Discovery Failed: ${it.message}")
-        }
+        val options = DiscoveryOptions.Builder().setStrategy(Strategy.P2P_STAR).setLowPower(false).build()
+        connectionsClient.startDiscovery(SERVICE_ID, endpointDiscoveryCallback, options)
+            .addOnFailureListener { addLog("❌ Discovery Failed: ${it.message}") }
     }
 
     private val endpointDiscoveryCallback = object : EndpointDiscoveryCallback() {
@@ -226,50 +211,29 @@ class MainActivity : ComponentActivity() {
             addLog("👀 Found Device: ${info.endpointName}")
             connectionsClient.requestConnection("SOS_User", endpointId, connectionLifecycleCallback)
         }
-        override fun onEndpointLost(endpointId: String) {
-            addLog("device lost: $endpointId")
-        }
+        override fun onEndpointLost(endpointId: String) {}
     }
 
     private val connectionLifecycleCallback = object : ConnectionLifecycleCallback() {
         override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
-            addLog("🤝 Connection Initiated: $endpointId")
             connectionsClient.acceptConnection(endpointId, payloadCallback)
         }
         override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
             if (result.status.isSuccess) {
                 connectedEndpoints.add(endpointId)
                 addLog("✅ Connected to $endpointId")
-
-                // 🛑 1. Stop the switching loop (Standard Logic)
                 handler.removeCallbacks(switchRoleRunnable)
-                addLog("🛑 Role Switching Stopped")
 
-                // 🚀 2. THE NEW FEATURE: "Store and Forward" Sync
-                // Check if we have any saved messages waiting
                 if (storedSOSMessages.isNotEmpty()) {
-                    addLog("🔄 Syncing ${storedSOSMessages.size} offline SOS messages...")
-
                     for (savedMsg in storedSOSMessages) {
-                        val payload = Payload.fromBytes(savedMsg.toByteArray())
-                        connectionsClient.sendPayload(endpointId, payload)
-                        addLog("➡️ Delayed Send: Sending saved SOS to $endpointId")
+                        connectionsClient.sendPayload(endpointId, Payload.fromBytes(savedMsg.toByteArray()))
                     }
                 }
-
-            } else {
-                addLog("❌ Connection Failed: ${result.status.statusCode}")
             }
         }
         override fun onDisconnected(endpointId: String) {
             connectedEndpoints.remove(endpointId)
-            addLog("⚠️ Disconnected from $endpointId")
-
-            // RESTART THE SEARCH LOOP
-            if (connectedEndpoints.isEmpty()) {
-                addLog("🔄 Restarting Mesh Search...")
-                handler.post(switchRoleRunnable)
-            }
+            if (connectedEndpoints.isEmpty()) handler.post(switchRoleRunnable)
         }
     }
 
@@ -279,25 +243,11 @@ class MainActivity : ComponentActivity() {
             addLog("📩 RECEIVED: $message")
             Toast.makeText(this@MainActivity, "SOS Received!", Toast.LENGTH_SHORT).show()
 
-            // 🛑 SAFETY CHECK: Only process if we haven't seen this message before
             if (!receivedMessages.contains(message)) {
-
-                // 1. MARK AS SEEN (Stop loops)
                 receivedMessages.add(message)
-
-                // 2. SAVE LOCALLY (Crucial for acting as a carrier/mule)
-                // This puts the message in the "backpack" to give to Phone C later
                 storedSOSMessages.add(message)
-
-                // 3. RELAY IMMEDIATELY (To anyone currently connected)
-                // sending to everyone EXCEPT the person who sent it (endpointId)
                 forwardMessage(message, endpointId)
-
-                // 4. UPLOAD IMMEDIATELY (If I have internet right now)
-                if (isInternetAvailable()) {
-                    addLog("🌐 Internet found. Uploading now...")
-                    uploadSOSMessages()
-                }
+                if (isInternetAvailable()) uploadSOSMessages()
             }
         }
         override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {}
@@ -311,29 +261,17 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun uploadSOSMessages() {
-        Thread {
-            val iterator = storedSOSMessages.iterator()
-            while (iterator.hasNext()) {
-                val message = iterator.next()
-                try {
-                    val url = URL(SERVER_URL)
-                    val connection = url.openConnection() as HttpURLConnection
-                    connection.requestMethod = "POST"
-                    connection.doOutput = true
-                    connection.setRequestProperty("Content-Type", "application/json")
-                    val json = "{\"message\":\"$message\"}"
-                    connection.outputStream.write(json.toByteArray())
-
-                    if (connection.responseCode == 200) {
-                        val successMsg = "☁️ Uploaded: $message"
-                        addLog(successMsg)
-                        iterator.remove()
-                    }
-                } catch (e: Exception) {
-                    addLog("⚠️ Upload Failed: ${e.message}")
-                }
+        val iterator = storedSOSMessages.iterator()
+        while (iterator.hasNext()) {
+            val message = iterator.next()
+            val key = database.child("sos_alerts").push().key
+            if (key != null) {
+                val sosData = mapOf("message" to message, "timestamp" to System.currentTimeMillis())
+                database.child("sos_alerts").child(key).setValue(sosData)
+                    .addOnSuccessListener { addLog("☁️ Firebase Upload Success") }
             }
-        }.start()
+            iterator.remove()
+        }
     }
 
     private fun forwardMessage(message: String, senderEndpoint: String) {
@@ -341,58 +279,20 @@ class MainActivity : ComponentActivity() {
         for (endpoint in connectedEndpoints) {
             if (endpoint != senderEndpoint) {
                 connectionsClient.sendPayload(endpoint, payload)
-                addLog("➡️ Relaying Message to $endpoint")
             }
         }
     }
 
-    // ------------------ UI COMPONENTS ------------------
-
-
-    @Composable
-    fun StatusLogBox(messages: List<String>) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(200.dp)
-                // 1. Dark Background (So white text is visible)
-                .background(Color.Black.copy(alpha = 0.8f), RoundedCornerShape(8.dp))
-                .border(1.dp, Color.Gray, RoundedCornerShape(8.dp))
-                .padding(8.dp)
-        ) {
-            Text(
-                "System Logs:",
-                style = MaterialTheme.typography.labelLarge,
-                color = Color.White, // 2. Header Text White
-                modifier = Modifier.padding(bottom = 4.dp)
-            )
-            LazyColumn {
-                items(messages) { msg ->
-                    Text(
-                        text = msg,
-                        fontSize = 12.sp,
-                        // 3. Log Text White (Errors appear in bright Red/Orange)
-                        color = if (msg.contains("❌") || msg.contains("⚠️")) Color(0xFFFF5555) else Color.White
-                    )
-                    // 4. Divider is now Dark Gray to blend in
-                    HorizontalDivider(color = Color.DarkGray, thickness = 0.5.dp)
-                }
-            }
-        }
-    }
-
-    // Function now accepts details about the emergency
-    // Updated function with Optional Parameters
-    private fun sendSOS(
-        rawPeople: String,
-        rawMedical: String,
-        rawHazard: String
-    ) {
-        // 1. HANDLE OPTIONAL LOGIC (Defaults)
-        // If string is empty, use default. Otherwise, use what they typed.
+    // --- MAIN LOGIC: SENDING SOS WITH USER DATA ---
+    private fun sendSOS(rawPeople: String, rawMedical: String, rawHazard: String) {
         val peopleCount = if (rawPeople.isBlank()) "1" else rawPeople
         val medicalCondition = if (rawMedical.isBlank()) "None" else rawMedical
         val hazardType = if (rawHazard.isBlank()) "Unknown" else rawHazard
+
+        // 1. RETRIEVE SAVED USER DATA
+        val name = prefs.getString("user_name", "Unknown") ?: "Unknown"
+        val age = prefs.getString("user_age", "?") ?: "?"
+        val phone = prefs.getString("user_phone", "No Phone") ?: "No Phone"
 
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             addLog("❌ Location Permission Missing")
@@ -403,9 +303,11 @@ class MainActivity : ComponentActivity() {
             val lat = location?.latitude ?: 0.0
             val lng = location?.longitude ?: 0.0
             val time = System.currentTimeMillis()
+            val msgId = java.util.UUID.randomUUID().toString().substring(0, 8)
 
-            // 2. PACKET CREATION
-            val sosMessage = "SOS|Lat:$lat|Lng:$lng|Time:$time|Ppl:$peopleCount|Med:$medicalCondition|Haz:$hazardType"
+            // 2. BUILD PACKET WITH USER INFO
+            // Format: ID | SOS | Lat | Lng | Time | Name | Age | Ph | Ppl | Med | Haz
+            val sosMessage = "$msgId|SOS|Lat:$lat|Lng:$lng|Time:$time|Name:$name|Age:$age|Ph:$phone|Ppl:$peopleCount|Med:$medicalCondition|Haz:$hazardType"
 
             addLog("🚨 PACKING: $sosMessage")
 
@@ -420,88 +322,86 @@ class MainActivity : ComponentActivity() {
             } else {
                 for (endpoint in connectedEndpoints) {
                     connectionsClient.sendPayload(endpoint, payload)
-                    addLog("➡️ Sent extended SOS to $endpoint")
+                }
+            }
+        }.addOnFailureListener { addLog("❌ Failed to get location") }
+    }
+
+    // --- UI COMPONENTS ---
+
+    @Composable
+    fun SignUpScreen(onRegister: (String, String, String) -> Unit) {
+        var name by remember { mutableStateOf("") }
+        var age by remember { mutableStateOf("") }
+        var phone by remember { mutableStateOf("") }
+
+        Column(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text("Create SOS Profile", style = MaterialTheme.typography.headlineMedium, color = Color.Black)
+            Text("This info will be sent to rescuers.", style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
+
+            Spacer(modifier = Modifier.height(30.dp))
+
+            OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Full Name") }, modifier = Modifier.fillMaxWidth())
+            Spacer(modifier = Modifier.height(10.dp))
+            OutlinedTextField(value = age, onValueChange = { age = it }, label = { Text("Age") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+            Spacer(modifier = Modifier.height(10.dp))
+            OutlinedTextField(value = phone, onValueChange = { phone = it }, label = { Text("Phone Number") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone), modifier = Modifier.fillMaxWidth())
+
+            Spacer(modifier = Modifier.height(30.dp))
+
+            Button(
+                onClick = { if (name.isNotBlank() && phone.isNotBlank()) onRegister(name, age, phone) },
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color.Blue)
+            ) {
+                Text("Save Profile", fontSize = 18.sp)
+            }
+        }
+    }
+
+    @Composable
+    fun StatusLogBox(messages: List<String>) {
+        Column(
+            modifier = Modifier.fillMaxWidth().height(200.dp).background(Color.Black.copy(alpha = 0.8f), RoundedCornerShape(8.dp)).padding(8.dp)
+        ) {
+            Text("Logs:", color = Color.White)
+            LazyColumn {
+                items(messages) { msg ->
+                    Text(text = msg, fontSize = 12.sp, color = if (msg.contains("❌")) Color.Red else Color.White)
+                    HorizontalDivider(color = Color.DarkGray)
                 }
             }
         }
     }
+
     @Composable
-    fun EmergencyScreen(
-        logMessages: List<String>,
-        onSendSOS: (String, String, String) -> Unit
-    ) {
-        // These variables hold what the user types
+    fun EmergencyScreen(logMessages: List<String>, onSendSOS: (String, String, String) -> Unit) {
         var peopleInput by remember { mutableStateOf("") }
         var medicalInput by remember { mutableStateOf("") }
         var hazardInput by remember { mutableStateOf("") }
 
-        Column(
-            modifier = Modifier.fillMaxSize().padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
-            // --- TOP SECTION: INPUTS ---
-            Column(
-                modifier = Modifier.weight(1f).fillMaxWidth(), // Takes up available space
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center // Centers inputs vertically
-            ) {
-                Text(
-                    "Emergency Details (Optional)",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Color.Black
-                )
-                Spacer(modifier = Modifier.height(15.dp))
-
-                // 1. People Count
-                OutlinedTextField(
-                    value = peopleInput,
-                    onValueChange = { peopleInput = it },
-                    label = { Text("People Count (Default: 1)") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // 2. Medical Condition
-                OutlinedTextField(
-                    value = medicalInput,
-                    onValueChange = { medicalInput = it },
-                    label = { Text("Medical Needs (Default: None)") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // 3. Hazard Type
-                OutlinedTextField(
-                    value = hazardInput,
-                    onValueChange = { hazardInput = it },
-                    label = { Text("Hazard Type (Default: Unknown)") },
-                    modifier = Modifier.fillMaxWidth()
-                )
+        Column(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.SpaceBetween) {
+            Column(modifier = Modifier.weight(1f).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                Text("EMERGENCY MODE", style = MaterialTheme.typography.headlineLarge, color = Color.Red)
                 Spacer(modifier = Modifier.height(20.dp))
-
-                // --- SOS BUTTON ---
+                OutlinedTextField(value = peopleInput, onValueChange = { peopleInput = it }, label = { Text("People Count") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = medicalInput, onValueChange = { medicalInput = it }, label = { Text("Medical Needs") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = hazardInput, onValueChange = { hazardInput = it }, label = { Text("Hazard Type") }, modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(20.dp))
                 Button(
                     onClick = {
-                        // Send the inputs to the main logic
                         onSendSOS(peopleInput, medicalInput, hazardInput)
-
-                        // Optional: Clear inputs after sending
-                        peopleInput = ""
-                        medicalInput = ""
-                        hazardInput = ""
+                        peopleInput = ""; medicalInput = ""; hazardInput = ""
                     },
                     modifier = Modifier.size(150.dp),
                     shape = CircleShape,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red),
-                    elevation = ButtonDefaults.buttonElevation(10.dp)
-                ) {
-                    Text("SOS", fontSize = 24.sp, color = Color.White)
-                }
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+                ) { Text("SOS", fontSize = 24.sp, color = Color.White) }
             }
-
-            // --- BOTTOM SECTION: LOGS ---
-            // (Re-using your existing StatusLogBox)
             StatusLogBox(messages = logMessages)
         }
     }
