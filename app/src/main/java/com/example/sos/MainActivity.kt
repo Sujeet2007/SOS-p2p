@@ -8,6 +8,11 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
+//Bluettoth support
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.le.AdvertiseCallback
+import android.bluetooth.le.AdvertiseData
+import android.bluetooth.le.AdvertiseSettings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -237,6 +242,52 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    //Bluetooth Fun
+    @android.annotation.SuppressLint("MissingPermission")
+    private fun startBleSosBeacon(name: String, count: String, med: String, haz: String) {
+        val bluetoothAdapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
+        val advertiser = bluetoothAdapter?.bluetoothLeAdvertiser
+
+        if (advertiser == null) return
+
+        val settings = android.bluetooth.le.AdvertiseSettings.Builder()
+            .setAdvertiseMode(android.bluetooth.le.AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+            .setTxPowerLevel(android.bluetooth.le.AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+            .setConnectable(false)
+            .build()
+
+        // 1. Truncate strings so they fit in the tiny 24-byte BLE limit!
+        val safeName = name.take(7) // Max 7 chars
+        val safeCount = count.take(2) // Max 2 chars
+        val safeMed = med.take(6)   // Max 6 chars
+        val safeHaz = haz.take(6)   // Max 6 chars
+
+        // Format: "Name,Count,Med,Hazard"
+        val payloadString = "$safeName,$safeCount,$safeMed,$safeHaz"
+        val payloadBytes = payloadString.toByteArray()
+
+        addLog("⚙️ BLE Payload String: [$payloadString] (${payloadBytes.size} bytes)")
+
+        val data = android.bluetooth.le.AdvertiseData.Builder()
+            .addManufacturerData(0x02E5, payloadBytes)
+            .build()
+
+        val advertiseCallback = object : android.bluetooth.le.AdvertiseCallback() {
+            override fun onStartSuccess(settingsInEffect: android.bluetooth.le.AdvertiseSettings) {
+                addLog("📡 BLE Hardware Beacon Actively Broadcasting!")
+            }
+            override fun onStartFailure(errorCode: Int) {
+                addLog("❌ BLE Beacon Failed: $errorCode")
+            }
+        }
+
+        advertiser.startAdvertising(settings, data, advertiseCallback)
+
+        handler.postDelayed({
+            advertiser.stopAdvertising(advertiseCallback)
+        }, 30000)
+    }
+
     private val payloadCallback = object : PayloadCallback() {
         override fun onPayloadReceived(endpointId: String, payload: Payload) {
             val message = String(payload.asBytes()!!)
@@ -303,7 +354,12 @@ class MainActivity : ComponentActivity() {
             val lat = location?.latitude ?: 0.0
             val lng = location?.longitude ?: 0.0
             val time = System.currentTimeMillis()
+
+            //Bluettoth
+            startBleSosBeacon(name, peopleCount, medicalCondition, hazardType)
+
             val msgId = java.util.UUID.randomUUID().toString().substring(0, 8)
+
 
             // 2. BUILD PACKET WITH USER INFO
             // Format: ID | SOS | Lat | Lng | Time | Name | Age | Ph | Ppl | Med | Haz

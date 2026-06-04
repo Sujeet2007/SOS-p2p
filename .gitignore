@@ -1,15 +1,41 @@
+# Gradle files
+.gradle/
+build/
+
+# IntelliJ/Android Studio files
+.idea/workspace.xml
+.idea/libraries/
+.idea/modules.xml
+.idea/gradle.xml
+.idea/assetWizardSettings.xml
+.idea/caches/
+.idea/navEditor.xml
+.idea/deploymentTargetSelector.xml
+.idea/deviceManager.xml
+.idea/inspectionProfiles/
+.idea/migrations.xml
+.idea/runConfigurations.xml
+.idea/vcs.xml
+.idea/.name
 *.iml
-.gradle
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
+
+# Local configuration
 local.properties
+# secrets.properties
+
+# Firebase
+google-services.json
+app/google-services.json
+
+# Build outputs
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aar
+*.jks
+*.keystore
+
+# OS files
+.DS_Store
+Thumbs.db
