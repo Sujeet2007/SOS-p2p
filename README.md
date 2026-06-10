@@ -14,6 +14,14 @@ A decentralized emergency communication application built for Android. This app 
     - Hazard type (e.g., Flood, Fire)
     - GPS Coordinates (Latitude/Longitude)
 
+## Centralized Monitoring (Cloud Integration)
+
+While the app functions primarily as a decentralized mesh network, it includes a cloud synchronization layer for rescue coordination:
+
+- **Server Sync**: Once any device in the mesh gains internet access, it automatically pushes all collected SOS messages to a central Firebase server.
+- **Incident Command System**: Data from the server can be fetched and visualized in real-time on a monitoring dashboard at a **fire station** or emergency response center.
+- **Location Tracking**: Rescuers can track the precise location of individuals in distress on a map, prioritized by the severity of their reported medical needs or hazard type.
+
 ## How to Use
 
 1. **Permissions**: Grant necessary permissions for Location, Bluetooth, and Nearby Devices on first launch.
