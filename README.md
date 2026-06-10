@@ -1,3 +1,5 @@
+![Vibe Coded](https://img.shields.io/badge/Built_With-Vibe_Coding-8A2BE2?style=for-the-badge&logo=probot)
+
 # SOS Mesh Network App
 
 A decentralized emergency communication application built for Android. This app allows users to broadcast SOS alerts and user profiles using Bluetooth Low Energy (BLE) and Google Nearby Connections, enabling communication in environments without cellular or internet connectivity.
